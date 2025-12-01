@@ -687,7 +687,8 @@ class WeChatDownloaderGUI:
                 
         except Exception as e:
             print(f"获取公众号二维码失败: {e}")
-            self.root.after(0, lambda: self.show_error(f"获取二维码失败: {str(e)}"))
+            error_msg = f"获取二维码失败: {str(e)}"
+            self.root.after(0, lambda msg=error_msg: self.show_error(msg))
             self.root.after(0, lambda: self.generate_qr_btn.config(state='normal', text="生成二维码"))
     
     def do_get_working_qr(self):
@@ -709,7 +710,8 @@ class WeChatDownloaderGUI:
                 
         except Exception as e:
             print(f"获取二维码失败: {e}")
-            self.root.after(0, lambda: self.show_error(f"获取二维码失败: {str(e)}"))
+            error_msg = f"获取二维码失败: {str(e)}"
+            self.root.after(0, lambda msg=error_msg: self.show_error(msg))
             
         finally:
             self.root.after(0, lambda: self.generate_qr_btn.config(state='normal', text="生成二维码"))
@@ -1373,7 +1375,8 @@ appmsglist_action_xxx=...; ua_id=...; wxuin=...
             self.root.after(0, lambda: self.display_search_results(accounts))
                 
         except Exception as e:
-            self.root.after(0, lambda: self.show_error(f"搜索失败: {str(e)}"))
+            error_msg = f"搜索失败: {str(e)}"
+            self.root.after(0, lambda msg=error_msg: self.show_error(msg))
             self.root.after(0, lambda: self.update_status("搜索失败"))
             
     def display_search_results(self, accounts):
@@ -1455,7 +1458,8 @@ appmsglist_action_xxx=...; ua_id=...; wxuin=...
             self.root.after(0, lambda: self.display_articles(articles, page))
                 
         except Exception as e:
-            self.root.after(0, lambda: self.show_error(f"加载文章失败: {str(e)}"))
+            error_msg = f"加载文章失败: {str(e)}"
+            self.root.after(0, lambda msg=error_msg: self.show_error(msg))
             self.root.after(0, lambda: self.update_status("加载文章失败"))
             
     def display_articles(self, articles, page):
@@ -1585,7 +1589,7 @@ appmsglist_action_xxx=...; ua_id=...; wxuin=...
             except Exception as e:
                 print(f"检查已下载文件失败: {e}")
             
-            print(f"已下载 {len(downloaded_files)} 篇文章")
+            print(f"已下载 {len(downloaded_articles)} 篇文章")
             
             # 获取所有文章
             all_articles = []
@@ -1596,7 +1600,8 @@ appmsglist_action_xxx=...; ua_id=...; wxuin=...
             while has_more:
                 try:
                     # 更新进度
-                    self.root.after(0, lambda p=page: 
+                    current_page = page
+                    self.root.after(0, lambda p=current_page: 
                                   self.progress_label.config(text=f"正在获取文章列表: 第{p}页"))
                     
                     # 获取当前页文章（使用begin而不是page）
@@ -1672,7 +1677,11 @@ appmsglist_action_xxx=...; ua_id=...; wxuin=...
             self.batch_export_articles(all_articles, output_path)
             
         except Exception as e:
-            self.root.after(0, lambda: self.show_error(f"获取文章列表失败: {str(e)}"))
+            import traceback
+            error_detail = traceback.format_exc()
+            print(f"获取文章列表失败详细错误: {error_detail}")
+            error_msg = f"获取文章列表失败: {str(e)}"
+            self.root.after(0, lambda msg=error_msg: self.show_error(msg))
             self.root.after(0, lambda: self.update_status("获取文章失败"))
     
     def sanitize_filename(self, filename):
@@ -1775,8 +1784,12 @@ appmsglist_action_xxx=...; ua_id=...; wxuin=...
             
         except Exception as e:
             self.exporting = False
+            import traceback
+            error_detail = traceback.format_exc()
+            print(f"批量导出失败详细错误: {error_detail}")
+            error_msg = f"批量导出过程中出错: {str(e)}"
             self.root.after(0, lambda: self.stop_export_btn.config(state='disabled'))
-            self.root.after(0, lambda: self.show_error(f"批量导出过程中出错: {str(e)}"))
+            self.root.after(0, lambda msg=error_msg: self.show_error(msg))
             self.root.after(0, lambda: self.update_status("批量导出失败"))
         
     def export_articles(self, articles):
@@ -1874,8 +1887,12 @@ appmsglist_action_xxx=...; ua_id=...; wxuin=...
             
         except Exception as e:
             self.exporting = False
+            import traceback
+            error_detail = traceback.format_exc()
+            print(f"导出过程中出错详细错误: {error_detail}")
+            error_msg = f"导出过程中出错: {str(e)}"
             self.root.after(0, lambda: self.stop_export_btn.config(state='disabled'))
-            self.root.after(0, lambda: self.show_error(f"导出过程中出错: {str(e)}"))
+            self.root.after(0, lambda msg=error_msg: self.show_error(msg))
             self.root.after(0, lambda: self.update_status("导出失败"))
 
     def run(self):
