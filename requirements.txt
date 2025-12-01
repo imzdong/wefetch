@@ -1,0 +1,32 @@
+# GUI相关
+# tkinter 是Python标准库，无需通过pip安装
+
+# 网络请求
+requests>=2.28.0
+
+# HTML解析
+beautifulsoup4>=4.11.0
+lxml>=4.9.0
+
+# 图像处理
+Pillow>=9.0.0
+
+# Markdown转换
+markdownify>=0.11.6
+
+# 二维码生成
+qrcode>=7.3.0
+
+# Excel文件处理
+openpyxl>=3.0.0
+xlrd>=2.0.0
+
+# Selenium自动化浏览器
+selenium>=4.15.0
+webdriver-manager>=4.0.0
+
+# 系统托盘支持（Windows）
+pystray>=0.19.0
+
+# 其他工具
+# pathlib 是Python标准库，无需安装
