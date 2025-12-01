@@ -1466,8 +1466,22 @@ appmsglist_action_xxx=...; ua_id=...; wxuin=...
             
         # 添加文章列表
         for i, article in enumerate(articles):
-            create_time = time.strftime("%Y-%m-%d %H:%M:%S", 
-                                       time.localtime(article.get('create_time', 0)))
+            # 尝试获取时间，如果没有则使用当前时间
+            create_time_value = article.get('create_time', 
+                                     article.get('datetime', 
+                                              article.get('time', time.time())))
+            
+            if isinstance(create_time_value, str):
+                # 如果是字符串时间，尝试解析
+                try:
+                    create_time = create_time_value
+                except:
+                    create_time = time.strftime("%Y-%m-%d %H:%M:%S")
+            else:
+                # 如果是时间戳
+                create_time = time.strftime("%Y-%m-%d %H:%M:%S", 
+                                       time.localtime(create_time_value))
+            
             self.articles_tree.insert('', 'end',
                                      text=str(i + 1),
                                      values=(article.get('title', ''),
@@ -1549,25 +1563,37 @@ appmsglist_action_xxx=...; ua_id=...; wxuin=...
             while page <= total_pages:
                 try:
                     # 获取当前页文章
-                    articles_data = self.downloader.get_articles_list(
+                    articles_list = self.downloader.get_articles_list(
                         self.current_account['fakeid'], 
                         self.config['token'], 
                         page, 
                         5  # 每页显示数量
                     )
                     
-                    if not articles_data.get('articles'):
+                    if not articles_list or len(articles_list) == 0:
+                        print(f"第{page}页没有文章数据")
                         break
                         
-                    # 更新总页数
-                    total_pages = articles_data.get('total_pages', 1)
-                    
                     # 添加到文章列表
-                    for article in articles_data['articles']:
-                        all_articles.append({
-                            'title': article['title'],
-                            'link': article['link']
-                        })
+                    for article in articles_list:
+                        # 提取文章信息（根据实际API返回格式）
+                        title = article.get('title', '未知标题')
+                        link = article.get('link', '')
+                        
+                        # 只添加有有效链接的文章
+                        if link:
+                            all_articles.append({
+                                'title': title,
+                                'link': link
+                            })
+                            print(f"添加文章: {title[:30]}...")
+                    
+                    print(f"第{page}页获取到 {len(articles_list)} 篇文章，累计 {len(all_articles)} 篇")
+                    
+                    # 如果获取的文章数量少于每页数量，说明已经到最后一页
+                    if len(articles_list) < 5:
+                        print(f"第{page}页文章数量 {len(articles_list)} < 每页数量 5，到达最后一页")
+                        break
                     
                     # 更新进度
                     self.root.after(0, lambda p=page, tp=total_pages: 
