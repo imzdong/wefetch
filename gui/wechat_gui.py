@@ -1550,19 +1550,56 @@ appmsglist_action_xxx=...; ua_id=...; wxuin=...
         """执行所有文章导出"""
         try:
             self.root.after(0, lambda: self.show_info("正在获取所有历史文章列表..."))
-            self.root.after(0, lambda: self.update_status("正在获取文章总数..."))
+            self.root.after(0, lambda: self.update_status("正在检查已下载文章..."))
             
             if not self.downloader:
                 self.downloader = WeChatArticleDownloader(self.config)
             
+            # 创建输出目录
+            output_path = self.output_dir.get()
+            if self.current_account:
+                output_path = os.path.join(output_path, self.current_account['nickname'])
+            os.makedirs(output_path, exist_ok=True)
+            
+            # 检查已下载的文章（断点续传）
+            downloaded_articles = set()
+            try:
+                for file in os.listdir(output_path):
+                    if file.endswith('.md') or file.endswith('.html'):
+                        # 从文件内容中提取文章链接来准确判断
+                        try:
+                            file_path = os.path.join(output_path, file)
+                            with open(file_path, 'r', encoding='utf-8') as f:
+                                content = f.read()
+                                # 查找原文链接
+                                if '原文链接:' in content:
+                                    lines = content.split('\n')
+                                    for line in lines:
+                                        if line.startswith('原文链接:'):
+                                            article_link = line.replace('原文链接:', '').strip()
+                                            downloaded_articles.add(article_link)
+                                            print(f"发现已下载文章链接: {article_link[:50]}...")
+                                            break
+                        except Exception as e:
+                            print(f"读取文件 {file} 失败: {e}")
+            except Exception as e:
+                print(f"检查已下载文件失败: {e}")
+            
+            print(f"已下载 {len(downloaded_files)} 篇文章")
+            
             # 获取所有文章
             all_articles = []
+            begin = 0  # 微信API使用begin参数表示起始位置
             page = 1
-            total_pages = 1
+            has_more = True
             
-            while page <= total_pages:
+            while has_more:
                 try:
-                    # 获取当前页文章
+                    # 更新进度
+                    self.root.after(0, lambda p=page: 
+                                  self.progress_label.config(text=f"正在获取文章列表: 第{p}页"))
+                    
+                    # 获取当前页文章（使用begin而不是page）
                     articles_list = self.downloader.get_articles_list(
                         self.current_account['fakeid'], 
                         self.config['token'], 
@@ -1571,62 +1608,87 @@ appmsglist_action_xxx=...; ua_id=...; wxuin=...
                     )
                     
                     if not articles_list or len(articles_list) == 0:
-                        print(f"第{page}页没有文章数据")
+                        print(f"第{page}页没有文章数据，结束获取")
                         break
                         
-                    # 添加到文章列表
+                    # 添加到文章列表（排除已下载的）
+                    new_articles_count = 0
                     for article in articles_list:
-                        # 提取文章信息（根据实际API返回格式）
                         title = article.get('title', '未知标题')
                         link = article.get('link', '')
                         
-                        # 只添加有有效链接的文章
-                        if link:
-                            all_articles.append({
-                                'title': title,
-                                'link': link
-                            })
-                            print(f"添加文章: {title[:30]}...")
+                        if not link:
+                            continue
+                        
+                        # 检查是否已下载（通过文章链接）
+                        if link in downloaded_articles:
+                            print(f"跳过已下载文章: {title[:30]}...")
+                            continue
+                        
+                        all_articles.append({
+                            'title': title,
+                            'link': link
+                        })
+                        new_articles_count += 1
+                        print(f"添加新文章: {title[:30]}...")
                     
-                    print(f"第{page}页获取到 {len(articles_list)} 篇文章，累计 {len(all_articles)} 篇")
+                    print(f"第{page}页: 获取{len(articles_list)}篇，新增{new_articles_count}篇，累计{len(all_articles)}篇")
                     
-                    # 如果获取的文章数量少于每页数量，说明已经到最后一页
-                    if len(articles_list) < 5:
-                        print(f"第{page}页文章数量 {len(articles_list)} < 每页数量 5，到达最后一页")
+                    # 如果这页没有新文章，可能已经到最后一页
+                    if new_articles_count == 0 and len(articles_list) < 5:
+                        print("本页没有新文章且数量不足，可能到达最后一页")
                         break
                     
-                    # 更新进度
-                    self.root.after(0, lambda p=page, tp=total_pages: 
-                                  self.progress_label.config(text=f"正在获取文章列表: {p}/{tp} 页"))
+                    # 如果获取的文章数量少于每页数量，说明可能到最后一页
+                    if len(articles_list) < 5:
+                        print(f"第{page}页文章数量 {len(articles_list)} < 每页数量 5，可能到达最后一页")
+                        # 再试下一页确认
+                        page += 1
+                        time.sleep(random.uniform(2, 3))
+                        continue
                     
                     page += 1
+                    begin += len(articles_list)
                     
                     # 添加延迟避免请求过快
-                    time.sleep(random.uniform(2, 4))
+                    time.sleep(random.uniform(2, 3))
                     
                 except Exception as e:
                     print(f"获取第{page}页文章失败: {e}")
-                    break
+                    # 失败了也试试下一页
+                    page += 1
+                    time.sleep(random.uniform(3, 5))
+                    continue
             
             if not all_articles:
-                self.root.after(0, lambda: self.show_error("未找到任何文章"))
+                self.root.after(0, lambda: self.show_info("所有文章都已下载完成！"))
+                self.root.after(0, lambda: self.update_status("没有新文章需要下载"))
                 return
             
-            self.root.after(0, lambda: self.show_info(f"已获取到 {len(all_articles)} 篇文章，开始下载..."))
-            self.root.after(0, lambda: self.update_status(f"开始导出 {len(all_articles)} 篇文章..."))
+            self.root.after(0, lambda: self.show_info(f"发现 {len(all_articles)} 篇新文章，开始下载..."))
+            self.root.after(0, lambda: self.update_status(f"开始导出 {len(all_articles)} 篇新文章..."))
             
-            # 创建输出目录
-            output_path = self.output_dir.get()
-            if self.current_account:
-                output_path = os.path.join(output_path, self.current_account['nickname'])
-            os.makedirs(output_path, exist_ok=True)
-            
-            # 开始导出所有文章
+            # 开始导出所有新文章
             self.batch_export_articles(all_articles, output_path)
             
         except Exception as e:
             self.root.after(0, lambda: self.show_error(f"获取文章列表失败: {str(e)}"))
             self.root.after(0, lambda: self.update_status("获取文章失败"))
+    
+    def sanitize_filename(self, filename):
+        """清理文件名中的非法字符"""
+        import re
+        try:
+            # 移除或替换非法字符
+            filename = re.sub(r'[\\/*?:"<>|]', '_', filename)
+            filename = filename.replace('\n', ' ').replace('\r', ' ')
+            # 限制长度
+            if len(filename) > 100:
+                filename = filename[:100]
+            return filename.strip()
+        except Exception as e:
+            print(f"清理文件名失败: {e}")
+            return filename
     
     def stop_export(self):
         """停止导出"""
@@ -1671,6 +1733,7 @@ appmsglist_action_xxx=...; ua_id=...; wxuin=...
                     filepath = self.downloader.save_article(article_data, output_path, format_type)
                     
                     success += 1
+                    print(f"成功下载并保存: {article['title'][:30]}... -> {os.path.basename(filepath)}")
                     
                     # 人类点击速度：每篇文章间隔2-4秒，模拟真实用户行为
                     sleep_time = random.uniform(2.0, 4.0)
@@ -1774,6 +1837,7 @@ appmsglist_action_xxx=...; ua_id=...; wxuin=...
                     filepath = self.downloader.save_article(article_data, output_path, format_type)
                     
                     success += 1
+                    print(f"成功下载并保存: {article['title'][:30]}... -> {os.path.basename(filepath)}")
                     
                     # 人类点击速度：每篇文章间隔2-4秒
                     sleep_time = random.uniform(2.0, 4.0)
