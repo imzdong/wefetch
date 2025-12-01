@@ -66,6 +66,10 @@ class WeChatDownloaderGUI:
         # 当前选中的公众号信息
         self.current_account = None
         
+        # 导出控制
+        self.exporting = False
+        self.stop_export_flag = False
+        
         # 创建主界面
         self.create_main_interface()
         
@@ -128,6 +132,10 @@ class WeChatDownloaderGUI:
         
         # 当前选中的公众号信息
         self.current_account = None
+        
+        # 导出控制
+        self.exporting = False
+        self.stop_export_flag = False
         
         # 创建主界面
         self.create_main_interface()
@@ -419,7 +427,11 @@ class WeChatDownloaderGUI:
         
         self.export_all_btn = ttk.Button(export_btn_frame, text="导出所有文章", 
                                          command=self.export_all_articles)
-        self.export_all_btn.pack(side='left')
+        self.export_all_btn.pack(side='left', padx=(0, 10))
+        
+        self.stop_export_btn = ttk.Button(export_btn_frame, text="停止导出", 
+                                         command=self.stop_export, state='disabled')
+        self.stop_export_btn.pack(side='left')
         
         # 进度显示
         progress_frame = ttk.LabelFrame(main_container, text="导出进度", padding=10)
@@ -1504,26 +1516,179 @@ appmsglist_action_xxx=...; ua_id=...; wxuin=...
         self.export_articles(articles)
         
     def export_all_articles(self):
-        """导出所有文章"""
+        """导出所有历史文章"""
         if not self.current_account:
             self.show_error("请先选择公众号")
             return
             
         # 询问用户确认
-        if not messagebox.askyesno("确认", "确定要导出所有文章吗？这可能需要很长时间。"):
+        if not messagebox.askyesno("确认导出所有文章", 
+                                "确定要导出该公众号的所有历史文章吗？\n\n"
+                                "⚠️ 这可能需要较长时间（取决于文章数量）\n"
+                                "📥 将按人类点击速度自动下载，避免被限制\n"
+                                "⏱️ 平均每篇文章间隔2-4秒"):
             return
             
-        self.show_info("正在获取所有文章列表...")
-        # 这里应该获取所有文章，暂时导出当前页
-        articles = []
-        for item in self.articles_tree.get_children():
-            article_data = self.articles_tree.item(item)
-            articles.append({
-                'title': article_data['values'][0],
-                'link': article_data['values'][2]
-            })
+        # 在新线程中获取所有文章并导出
+        threading.Thread(target=self.do_export_all_articles, daemon=True).start()
+    
+    def do_export_all_articles(self):
+        """执行所有文章导出"""
+        try:
+            self.root.after(0, lambda: self.show_info("正在获取所有历史文章列表..."))
+            self.root.after(0, lambda: self.update_status("正在获取文章总数..."))
             
-        self.export_articles(articles)
+            if not self.downloader:
+                self.downloader = WeChatArticleDownloader(self.config)
+            
+            # 获取所有文章
+            all_articles = []
+            page = 1
+            total_pages = 1
+            
+            while page <= total_pages:
+                try:
+                    # 获取当前页文章
+                    articles_data = self.downloader.get_articles_list(
+                        self.current_account['fakeid'], 
+                        self.config['token'], 
+                        page, 
+                        5  # 每页显示数量
+                    )
+                    
+                    if not articles_data.get('articles'):
+                        break
+                        
+                    # 更新总页数
+                    total_pages = articles_data.get('total_pages', 1)
+                    
+                    # 添加到文章列表
+                    for article in articles_data['articles']:
+                        all_articles.append({
+                            'title': article['title'],
+                            'link': article['link']
+                        })
+                    
+                    # 更新进度
+                    self.root.after(0, lambda p=page, tp=total_pages: 
+                                  self.progress_label.config(text=f"正在获取文章列表: {p}/{tp} 页"))
+                    
+                    page += 1
+                    
+                    # 添加延迟避免请求过快
+                    time.sleep(random.uniform(2, 4))
+                    
+                except Exception as e:
+                    print(f"获取第{page}页文章失败: {e}")
+                    break
+            
+            if not all_articles:
+                self.root.after(0, lambda: self.show_error("未找到任何文章"))
+                return
+            
+            self.root.after(0, lambda: self.show_info(f"已获取到 {len(all_articles)} 篇文章，开始下载..."))
+            self.root.after(0, lambda: self.update_status(f"开始导出 {len(all_articles)} 篇文章..."))
+            
+            # 创建输出目录
+            output_path = self.output_dir.get()
+            if self.current_account:
+                output_path = os.path.join(output_path, self.current_account['nickname'])
+            os.makedirs(output_path, exist_ok=True)
+            
+            # 开始导出所有文章
+            self.batch_export_articles(all_articles, output_path)
+            
+        except Exception as e:
+            self.root.after(0, lambda: self.show_error(f"获取文章列表失败: {str(e)}"))
+            self.root.after(0, lambda: self.update_status("获取文章失败"))
+    
+    def stop_export(self):
+        """停止导出"""
+        if self.exporting:
+            self.stop_export_flag = True
+            self.update_status("正在停止导出...")
+            self.stop_export_btn.config(state='disabled')
+            self.show_info("正在停止导出，请稍候...")
+    
+    def batch_export_articles(self, articles, output_path):
+        """批量导出文章"""
+        try:
+            # 设置导出状态
+            self.exporting = True
+            self.stop_export_flag = False
+            self.root.after(0, lambda: self.stop_export_btn.config(state='normal'))
+            
+            total = len(articles)
+            success = 0
+            failed = 0
+            
+            for i, article in enumerate(articles):
+                # 检查是否需要停止
+                if self.stop_export_flag:
+                    self.root.after(0, lambda: self.update_status("导出已停止"))
+                    self.root.after(0, lambda: self.progress_label.config(
+                        text=f"已停止: 成功 {success} 篇，失败 {failed} 篇 (共处理 {i}/{total} 篇)"))
+                    break
+                
+                try:
+                    # 更新进度
+                    progress = (i / total) * 100
+                    self.root.after(0, lambda p=progress: self.progress_var.set(p))
+                    self.root.after(0, lambda i=i, total=total: 
+                                  self.progress_label.config(text=f"正在下载: {i+1}/{total} - {article['title'][:20]}..."))
+                    
+                    # 获取文章内容
+                    article_data = self.downloader.get_article_content(article['link'])
+                    
+                    # 保存文章
+                    format_type = self.export_format.get()
+                    filepath = self.downloader.save_article(article_data, output_path, format_type)
+                    
+                    success += 1
+                    
+                    # 人类点击速度：每篇文章间隔2-4秒，模拟真实用户行为
+                    sleep_time = random.uniform(2.0, 4.0)
+                    self.root.after(0, lambda t=sleep_time: 
+                                  self.update_status(f"下载完成，等待 {t:.1f} 秒后继续..."))
+                    
+                    # 分段睡眠，支持中断
+                    for _ in range(int(sleep_time * 2)):  # 每0.5秒检查一次
+                        if self.stop_export_flag:
+                            break
+                        time.sleep(0.5)
+                    
+                    if self.stop_export_flag:
+                        break
+                    
+                except Exception as e:
+                    failed += 1
+                    print(f"下载文章失败: {article.get('title', '')}, 错误: {e}")
+                    # 如果失败，稍等一下再继续
+                    time.sleep(random.uniform(1, 2))
+            
+            # 完成导出
+            self.exporting = False
+            self.root.after(0, lambda: self.stop_export_btn.config(state='disabled'))
+            
+            if self.stop_export_flag:
+                result_msg = f"导出已停止！\n\n📊 统计信息:\n✅ 成功: {success} 篇\n❌ 失败: {failed} 篇\n⏹️ 已处理: {i+1}/{total} 篇\n📁 保存位置: {output_path}"
+            else:
+                self.root.after(0, lambda: self.progress_var.set(100))
+                result_msg = f"导出完成！\n\n📊 统计信息:\n✅ 成功: {success} 篇\n❌ 失败: {failed} 篇\n📁 保存位置: {output_path}"
+                
+                if failed > 0:
+                    result_msg += f"\n\n⚠️ 提示: 有 {failed} 篇文章下载失败，可能是网络问题或文章已被删除"
+            
+            self.root.after(0, lambda: self.progress_label.config(
+                text=f"{'停止' if self.stop_export_flag else '完成'}: 成功 {success} 篇，失败 {failed} 篇"))
+            self.root.after(0, lambda: self.update_status(f"导出{'已停止' if self.stop_export_flag else '完成'}: 成功 {success}/{total} 篇文章"))
+            self.root.after(0, lambda: self.show_info(result_msg))
+            
+        except Exception as e:
+            self.exporting = False
+            self.root.after(0, lambda: self.stop_export_btn.config(state='disabled'))
+            self.root.after(0, lambda: self.show_error(f"批量导出过程中出错: {str(e)}"))
+            self.root.after(0, lambda: self.update_status("批量导出失败"))
         
     def export_articles(self, articles):
         """导出文章"""
@@ -1544,6 +1709,11 @@ appmsglist_action_xxx=...; ua_id=...; wxuin=...
     def do_export_articles(self, articles):
         """执行文章导出"""
         try:
+            # 设置导出状态
+            self.exporting = True
+            self.stop_export_flag = False
+            self.root.after(0, lambda: self.stop_export_btn.config(state='normal'))
+            
             if not self.downloader:
                 self.downloader = WeChatArticleDownloader(self.config)
             
@@ -1557,6 +1727,13 @@ appmsglist_action_xxx=...; ua_id=...; wxuin=...
             success = 0
             
             for i, article in enumerate(articles):
+                # 检查是否需要停止
+                if self.stop_export_flag:
+                    self.root.after(0, lambda: self.update_status("导出已停止"))
+                    self.root.after(0, lambda: self.progress_label.config(
+                        text=f"已停止: 成功 {success} 篇 (共处理 {i}/{total} 篇)"))
+                    break
+                
                 try:
                     # 更新进度
                     progress = (i / total) * 100
@@ -1572,19 +1749,42 @@ appmsglist_action_xxx=...; ua_id=...; wxuin=...
                     
                     success += 1
                     
-                    # 添加延迟避免请求过快
-                    time.sleep(random.uniform(1, 3))
+                    # 人类点击速度：每篇文章间隔2-4秒
+                    sleep_time = random.uniform(2.0, 4.0)
+                    self.root.after(0, lambda t=sleep_time: 
+                                  self.update_status(f"下载完成，等待 {t:.1f} 秒后继续..."))
+                    
+                    # 分段睡眠，支持中断
+                    for _ in range(int(sleep_time * 2)):  # 每0.5秒检查一次
+                        if self.stop_export_flag:
+                            break
+                        time.sleep(0.5)
+                    
+                    if self.stop_export_flag:
+                        break
                     
                 except Exception as e:
                     print(f"导出文章失败: {article.get('title', '')}, 错误: {e}")
-                    
+            
             # 完成导出
-            self.root.after(0, lambda: self.progress_var.set(100))
-            self.root.after(0, lambda: self.progress_label.config(text=f"导出完成: 成功 {success}/{total} 篇"))
-            self.root.after(0, lambda: self.update_status(f"导出完成: 成功 {success}/{total} 篇文章"))
-            self.root.after(0, lambda: self.show_info(f"导出完成！成功导出 {success}/{total} 篇文章到:\n{output_path}"))
+            self.exporting = False
+            self.root.after(0, lambda: self.stop_export_btn.config(state='disabled'))
+            
+            if self.stop_export_flag:
+                self.root.after(0, lambda: self.progress_var.set((i+1)/total*100))
+                result_msg = f"导出已停止！\n\n📊 统计信息:\n✅ 成功: {success} 篇\n⏹️ 已处理: {i+1}/{total} 篇\n📁 保存位置: {output_path}"
+            else:
+                self.root.after(0, lambda: self.progress_var.set(100))
+                result_msg = f"导出完成！成功导出 {success}/{total} 篇文章到:\n{output_path}"
+            
+            self.root.after(0, lambda: self.progress_label.config(
+                text=f"{'停止' if self.stop_export_flag else '完成'}: 成功 {success}/{total} 篇"))
+            self.root.after(0, lambda: self.update_status(f"导出{'已停止' if self.stop_export_flag else '完成'}: 成功 {success}/{total} 篇文章"))
+            self.root.after(0, lambda: self.show_info(result_msg))
             
         except Exception as e:
+            self.exporting = False
+            self.root.after(0, lambda: self.stop_export_btn.config(state='disabled'))
             self.root.after(0, lambda: self.show_error(f"导出过程中出错: {str(e)}"))
             self.root.after(0, lambda: self.update_status("导出失败"))
 
